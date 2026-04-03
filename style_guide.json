@@ -1,0 +1,107 @@
+{
+  "version": "1.0.0",
+  "description": "TraceAudit Style Guide — defines the canonical rules for each semantic bug category. The CoT Reviewer audits each execution trace against these rules.",
+  "bug_categories": {
+    "RESOURCE_LEAK": {
+      "id": "RESOURCE_LEAK",
+      "severity": "HIGH",
+      "description": "A resource (file handle, socket, DB connection, lock) is acquired but not guaranteed to be released on all code paths, especially exceptions.",
+      "detection_signals": [
+        "File opened without a context manager (with statement) or explicit .close() in a finally block",
+        "Socket or connection object created but no guarantee of .close() on exception paths",
+        "Threading Lock acquired via .acquire() without a corresponding .release() in a finally block",
+        "Generator or iterator opened but never exhausted or explicitly closed",
+        "Temporary file created but cleanup not guaranteed"
+      ],
+      "trace_checklist": [
+        "Identify every resource acquisition site (open, socket, connect, Lock.acquire)",
+        "Trace the EXCEPTION path — does the resource get released?",
+        "Trace the EARLY RETURN path — does the resource get released?",
+        "Check for nested resource acquisitions without proper nesting of finally blocks"
+      ],
+      "linter_blind_spot": "flake8/pylint cannot trace resource lifetime across function branches; they only flag missing 'with' for simple cases.",
+      "example_pattern": "f = open(path); data = f.read(); return data  # f never closed on exception"
+    },
+    "BOUNDARY_VIOLATION": {
+      "id": "BOUNDARY_VIOLATION",
+      "severity": "MEDIUM",
+      "description": "Off-by-one errors, incorrect slice indices, missing empty-collection guards, or wrong loop termination conditions that cause silent data corruption or IndexError.",
+      "detection_signals": [
+        "Loop uses len(x) instead of len(x)-1 for index-based access",
+        "Slice uses [0:n] when [0:n+1] or [1:n] was intended",
+        "Function does not guard against empty list/string before indexing",
+        "Window/batch logic computes incorrect boundary at the last element",
+        "Off-by-one in pagination (0-indexed vs 1-indexed API mismatch)"
+      ],
+      "trace_checklist": [
+        "Manually evaluate the loop bounds for the FIRST and LAST iteration",
+        "Trace what happens when the input collection has 0 elements",
+        "Trace what happens when the input collection has exactly 1 element",
+        "Verify slice semantics: Python slices are [start:stop) — stop is exclusive"
+      ],
+      "linter_blind_spot": "Static analysis cannot evaluate runtime index arithmetic without symbolic execution.",
+      "example_pattern": "for i in range(len(items)): process(items[i], items[i+1])  # IndexError on last item"
+    },
+    "INSECURE_DATA_FLOW": {
+      "id": "INSECURE_DATA_FLOW",
+      "severity": "CRITICAL",
+      "description": "Sensitive data (passwords, tokens, keys) flows into an insecure sink (logs, URLs, plaintext files, error messages, or weak cryptographic operations).",
+      "detection_signals": [
+        "Password or secret key passed to print(), logging.info(), or str()",
+        "Secret embedded in a URL query parameter (visible in server logs)",
+        "Hash comparison using == instead of hmac.compare_digest (timing attack)",
+        "Credentials stored as plaintext in a dict/file without encryption",
+        "Token/secret hardcoded in source code as a string literal",
+        "Sensitive exception traceback propagated to HTTP response body"
+      ],
+      "trace_checklist": [
+        "Label all variables that hold sensitive data (passwords, keys, tokens)",
+        "Trace each labeled variable to its eventual sink",
+        "Verify hash/signature comparisons use constant-time functions",
+        "Check that exception handlers do not re-raise with full tracebacks to callers"
+      ],
+      "linter_blind_spot": "Bandit catches hardcoded secrets and some weak crypto, but misses tainted data flow through multiple function calls.",
+      "example_pattern": "logger.info(f'Auth attempt: user={user}, password={password}')  # credential leak"
+    },
+    "CONCURRENCY_HAZARD": {
+      "id": "CONCURRENCY_HAZARD",
+      "severity": "HIGH",
+      "description": "A shared mutable resource is accessed from multiple threads without proper synchronization, causing race conditions, lost updates, or deadlocks.",
+      "detection_signals": [
+        "Shared list/dict/counter mutated inside a thread without a Lock",
+        "read-modify-write sequence (x = x + 1) on a shared variable outside a Lock",
+        "Lock acquired in one order in Thread A and the reverse order in Thread B (deadlock)",
+        "queue.Queue used correctly for data but result collection list is mutated without a lock",
+        "Thread started with daemon=False but not joined, causing premature resource cleanup"
+      ],
+      "trace_checklist": [
+        "Identify all shared mutable state between threads",
+        "For each mutation site, check: is it inside a with lock: block?",
+        "Trace the lock acquisition ORDER across all code paths for deadlock potential",
+        "Verify producer/consumer queues use sentinel values correctly for clean shutdown"
+      ],
+      "linter_blind_spot": "Thread safety cannot be verified by syntax-level analysis; it requires understanding of execution interleaving.",
+      "example_pattern": "results.append(x)  # results shared between threads, no lock around append"
+    },
+    "IMPROPER_ERROR_HANDLING": {
+      "id": "IMPROPER_ERROR_HANDLING",
+      "severity": "MEDIUM",
+      "description": "Exceptions are swallowed silently, caught too broadly, or handled in a way that masks the root cause and allows the program to continue in a corrupt state.",
+      "detection_signals": [
+        "bare except: clause that catches all exceptions including KeyboardInterrupt",
+        "except Exception: pass with no logging or re-raising",
+        "except block that only logs but allows execution to continue with invalid state",
+        "Return of a default value (None, [], 0) on exception without caller documentation",
+        "Exception caught and re-raised as a different type, losing the original traceback (raise NewError from None)"
+      ],
+      "trace_checklist": [
+        "Identify every try/except block",
+        "Trace what the program state looks like AFTER the except block executes",
+        "Verify: can the caller distinguish between a normal empty result and an error result?",
+        "Check if the exception type is specific enough to avoid catching unrelated errors"
+      ],
+      "linter_blind_spot": "Linters can flag bare 'except' and 'pass' but cannot assess whether swallowed exceptions lead to corrupt program state.",
+      "example_pattern": "try: result = process(data)\nexcept Exception: result = []  # silent failure, caller unaware"
+    }
+  }
+}
